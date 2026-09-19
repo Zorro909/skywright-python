@@ -13,8 +13,8 @@ python scripts/bootstrap.py
 ```
 
 The bootstrap command creates a Python 3.14 environment in `.venv`, asks uv to detect the local
-accelerator, and installs the matching PyTorch build. uv checks for NVIDIA CUDA, AMD ROCm, and
-Intel XPU support. It falls back to the CPU build when it finds no supported accelerator.
+accelerator, and installs the newest matching PyTorch 2.x build. uv checks for NVIDIA CUDA, AMD
+ROCm, and Intel XPU support. It falls back to the CPU build when it finds no supported accelerator.
 
 Hardware discovery can be unreliable inside a container or on a login node. Override it when
 needed:

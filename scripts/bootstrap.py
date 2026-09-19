@@ -107,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         backend,
         "--reinstall-package",
         "torch",
+        "--upgrade-package",
+        "torch",
     ]
     if not args.no_dev:
         install.extend(["--group", "dev"])
