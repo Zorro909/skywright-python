@@ -30,6 +30,9 @@ docker run --rm skywright-trial
 See [base images](docs/docker.md) for GPU profiles, project dependencies, and host
 requirements. These commands build local images; no registry release is published.
 
+Skywright can also stream Parquet datasets from S3-compatible storage. See
+[datasets](docs/datasets.md) for configuration and training-loop usage.
+
 ## Training entrypoint
 
 A project exposes a setup function that returns its training definition. Skywright

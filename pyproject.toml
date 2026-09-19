@@ -18,7 +18,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "datasets==5.0.1",
     "numpy>=1.26,<3",
+    "s3fs==2026.6.0",
     "torch>=2.13,<2.14",
 ]
 
