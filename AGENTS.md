@@ -16,6 +16,11 @@ Keep it simple. Understand the problem before choosing the design.
 - Type public interfaces. Use a known type instead of reaching for `Any`.
 - Care about startup time and overhead during training. Measure before optimizing.
 
+## Drafting
+
+- Do all transient design and specification work in `.scratch/`. Complete the draft
+  before starting implementation, and keep the two phases separate.
+
 ## Verification
 
 - Consider library use both inside and outside Docker, with CPU, CUDA, and ROCm.
