@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.17"
+          enable-cache: true
+      - name: Install the CPU workspace
+        run: python scripts/bootstrap.py --backend cpu
+      - name: Lint
+        run: uv run --no-sync ruff check .
+      - name: Type-check
+        run: uv run --no-sync ty check
+      - name: Test
+        run: uv run --no-sync pytest --cov=skywright --cov-report=term-missing
