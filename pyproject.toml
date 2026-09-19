@@ -7,22 +7,19 @@ name = "skywright"
 version = "0.1.0"
 description = "Opinionated deployment for PyTorch training and fine-tuning jobs"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Zorro909" }]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = [
     "numpy>=1.26,<3",
-    "torch>=2.7,<3",
+    "torch>=2.14,<3",
 ]
 
 [project.scripts]
@@ -44,7 +41,7 @@ addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"
 line-length = 100
 src = ["src", "tests"]
 
@@ -55,7 +52,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "tests/**" = ["S101"]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.14"
 
 [tool.uv.pip]
 torch-backend = "auto"

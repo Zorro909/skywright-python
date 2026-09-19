@@ -26,7 +26,7 @@ def test_backend_rejects_ambiguous_or_invalid_names(backend: str) -> None:
 
 @pytest.mark.parametrize(
     ("output", "expected"),
-    [("uv 0.7.14\n", (0, 7, 14)), ("uv 0.8.8 (abcdef 2025-08-20)\n", (0, 8, 8))],
+    [("uv 0.11.3\n", (0, 11, 3)), ("uv 0.12.17 (abcdef 2026-09-18)\n", (0, 12, 17))],
 )
 def test_uv_version(
     monkeypatch: pytest.MonkeyPatch, output: str, expected: tuple[int, ...]

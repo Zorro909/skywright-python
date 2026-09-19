@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MINIMUM_UV_VERSION = (0, 7, 14)
+MINIMUM_UV_VERSION = (0, 11, 3)
 BACKEND_PATTERN = re.compile(r"(?:auto|cpu|xpu|cu\d+|rocm\d+(?:\.\d+)*)\Z")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,8 +26,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--python",
-        default="3.12",
-        help="Python interpreter request passed to uv venv (default: 3.12)",
+        default="3.14",
+        help="Python interpreter request passed to uv venv (default: 3.14)",
     )
     parser.add_argument(
         "--no-dev",
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if _uv_version(uv) < MINIMUM_UV_VERSION:
         minimum = ".".join(str(part) for part in MINIMUM_UV_VERSION)
-        print(f"uv {minimum} or newer is required for AMD GPU detection.", file=sys.stderr)
+        print(f"uv {minimum} or newer is required for current ROCm indexes.", file=sys.stderr)
         return 1
 
     try:

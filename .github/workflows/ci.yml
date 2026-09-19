@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
-          version: "0.8.8"
+          version: "0.12.17"
           enable-cache: true
       - name: Install the CPU workspace
         run: python scripts/bootstrap.py --backend cpu
