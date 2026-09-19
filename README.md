@@ -15,6 +15,21 @@ start/stop events.
 We follow KISS. Added complexity must have a clear benefit for library users or
 maintainers.
 
+## Docker base images
+
+The base image packages Skywright and PyTorch with CPU, CUDA 13.2, or ROCm 10.0.
+A project adds its files and training setup target to create a runnable image.
+For a first CPU trial:
+
+```console
+docker build --build-arg PROFILE=cpu -t skywright:0.1.0-cpu .
+docker build -t skywright-trial examples/trial
+docker run --rm skywright-trial
+```
+
+See [base images](docs/docker.md) for GPU profiles, project dependencies, and host
+requirements. These commands build local images; no registry release is published.
+
 ## Training entrypoint
 
 A project exposes a setup function that returns its training definition. Skywright
@@ -69,7 +84,7 @@ completes, fails, or is interrupted.
 
 ## Development setup
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11.3 or newer,
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.12.17 or newer,
 then run:
 
 ```console

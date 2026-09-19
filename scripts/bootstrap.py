@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MINIMUM_UV_VERSION = (0, 11, 3)
+MINIMUM_UV_VERSION = (0, 12, 17)
 BACKEND_PATTERN = re.compile(r"(?:auto|cpu|xpu|cu\d+|rocm\d+(?:\.\d+)*)\Z")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,7 +22,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--backend",
-        help="uv PyTorch backend such as auto, cpu, cu130, rocm7.2, or xpu",
+        help="uv PyTorch backend such as auto, cpu, cu132, rocm7.2, or xpu",
     )
     parser.add_argument(
         "--python",

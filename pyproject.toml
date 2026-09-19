@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26,<3",
-    "torch>=2.14,<3",
+    "torch>=2.13,<2.14",
 ]
 
 [project.scripts]
