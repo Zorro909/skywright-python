@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import signal
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import overload
+from types import FrameType
+from typing import Never, overload
 
 from skywright.accelerator import Accelerator, inspect_accelerator
 
@@ -114,33 +116,41 @@ def run[Batch](setup: Setup[Batch], argv: Sequence[str] = ()) -> int:
     training = setup(context)
     _validate_training(training)
 
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, _interrupt_on_sigterm)
     try:
-        training.listeners._dispatch(Start(context=context))
-        for epoch in range(training.epochs):
-            for batch in training.batches(epoch):
-                training.step(batch)
-    except BaseException as error:
-        outcome = (
-            RunOutcome.INTERRUPTED
-            if isinstance(error, (KeyboardInterrupt, SystemExit))
-            else RunOutcome.FAILED
-        )
-        stop_errors = training.listeners._dispatch_all(
-            Stop(context=context, outcome=outcome, error=error)
-        )
-        for stop_error in stop_errors:
-            error.add_note(f"Stop listener failed: {stop_error!r}")
-        raise
+        try:
+            training.listeners._dispatch(Start(context=context))
+            for epoch in range(training.epochs):
+                for batch in training.batches(epoch):
+                    training.step(batch)
+        except BaseException as error:
+            outcome = (
+                RunOutcome.INTERRUPTED
+                if isinstance(error, (KeyboardInterrupt, SystemExit))
+                else RunOutcome.FAILED
+            )
+            stop_errors = training.listeners._dispatch_all(
+                Stop(context=context, outcome=outcome, error=error)
+            )
+            for stop_error in stop_errors:
+                error.add_note(f"Stop listener failed: {stop_error!r}")
+            raise
 
-    stop_errors = training.listeners._dispatch_all(
-        Stop(context=context, outcome=RunOutcome.COMPLETED, error=None)
-    )
-    if stop_errors:
-        first_error, *additional_errors = stop_errors
-        for error in additional_errors:
-            first_error.add_note(f"Another Stop listener failed: {error!r}")
-        raise first_error
-    return 0
+        stop_errors = training.listeners._dispatch_all(
+            Stop(context=context, outcome=RunOutcome.COMPLETED, error=None)
+        )
+        if stop_errors:
+            first_error, *additional_errors = stop_errors
+            for error in additional_errors:
+                first_error.add_note(f"Another Stop listener failed: {error!r}")
+            raise first_error
+        return 0
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+
+
+def _interrupt_on_sigterm(signum: int, frame: FrameType | None) -> Never:
+    raise SystemExit(128 + signum)
 
 
 def _validate_training(training: object) -> None:
