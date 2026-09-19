@@ -57,6 +57,9 @@ is `/workspace`, and training runs as the `skywright` user with UID 1000. Python
 Skywright live in `/opt/venv`, outside the project directory. Exclude `.venv`, Git
 metadata, credentials, and datasets in the project's `.dockerignore`.
 
+Dataset bindings default to `/etc/skywright/datasets.toml`. Mount that file
+read-only at runtime, or set `SKYWRIGHT_DATASETS_CONFIG` to another mounted path.
+
 Try the complete example, which trains a linear model on synthetic data:
 
 ```console

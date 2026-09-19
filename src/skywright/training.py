@@ -5,11 +5,11 @@ from __future__ import annotations
 import signal
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from types import FrameType
-from typing import Never, overload
+from typing import Never
 
 from skywright.accelerator import Accelerator, inspect_accelerator
+from skywright.events import EventListeners, RunOutcome, Start, Stop
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,76 +18,6 @@ class RunContext:
 
     argv: tuple[str, ...]
     accelerator: Accelerator
-
-
-@dataclass(frozen=True, slots=True)
-class Start:
-    """Emitted immediately before Skywright starts the training loop."""
-
-    context: RunContext
-
-
-class RunOutcome(StrEnum):
-    """The reason a training run stopped."""
-
-    COMPLETED = "completed"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-
-
-@dataclass(frozen=True, slots=True)
-class Stop:
-    """Emitted when a started run leaves the training loop."""
-
-    context: RunContext
-    outcome: RunOutcome
-    error: BaseException | None
-
-
-type Event = Start | Stop
-type Listener[EventType: Event] = Callable[[EventType], object]
-
-
-class EventListeners:
-    """Listeners registered for Skywright lifecycle events."""
-
-    def __init__(self) -> None:
-        self._listeners: dict[type[Start] | type[Stop], list[Callable[..., object]]] = {
-            Start: [],
-            Stop: [],
-        }
-
-    @overload
-    def add(self, event_type: type[Start], listener: Listener[Start], /) -> None: ...
-
-    @overload
-    def add(self, event_type: type[Stop], listener: Listener[Stop], /) -> None: ...
-
-    def add(
-        self,
-        event_type: type[Start] | type[Stop],
-        listener: Callable[..., object],
-        /,
-    ) -> None:
-        """Register a listener for an event type."""
-        if event_type not in (Start, Stop):
-            raise ValueError(f"Unsupported event type: {event_type!r}")
-        if not callable(listener):
-            raise TypeError("listener must be callable")
-        self._listeners[event_type].append(listener)
-
-    def _dispatch(self, event: Event) -> None:
-        for listener in tuple(self._listeners[type(event)]):
-            listener(event)
-
-    def _dispatch_all(self, event: Stop) -> tuple[BaseException, ...]:
-        errors: list[BaseException] = []
-        for listener in tuple(self._listeners[Stop]):
-            try:
-                listener(event)
-            except BaseException as error:
-                errors.append(error)
-        return tuple(errors)
 
 
 @dataclass(frozen=True, slots=True)

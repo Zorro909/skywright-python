@@ -73,7 +73,7 @@ PY
 ENV UV_CONSTRAINT=/opt/skywright/constraints.txt \
     PIP_CONSTRAINT=/opt/skywright/constraints.txt
 RUN useradd --create-home --uid 1000 skywright \
-    && mkdir /workspace \
+    && mkdir /workspace /etc/skywright \
     && chown skywright:skywright /workspace
 WORKDIR /workspace
 USER skywright

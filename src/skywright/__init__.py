@@ -1,18 +1,28 @@
 """Deploy PyTorch training jobs with fewer moving parts."""
 
 from skywright.accelerator import Accelerator, inspect_accelerator
-from skywright.training import (
+from skywright.datasets import Dataset
+from skywright.events import (
+    DatasetOpened,
+    DatasetOpenFailed,
+    DatasetOpenStarted,
     EventListeners,
-    RunContext,
     RunOutcome,
     Start,
     Stop,
+)
+from skywright.training import (
+    RunContext,
     Training,
     run,
 )
 
 __all__ = [
     "Accelerator",
+    "Dataset",
+    "DatasetOpenFailed",
+    "DatasetOpenStarted",
+    "DatasetOpened",
     "EventListeners",
     "RunContext",
     "RunOutcome",
