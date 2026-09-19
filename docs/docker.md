@@ -92,8 +92,15 @@ describes backend selection.
 
 The ROCm image uses AMD's index directly because uv has no ROCm 10 backend
 selector. It disables uv configuration-file discovery so project settings cannot
-restore automatic backend selection. Pass any additional indexes on the command
-line, for example `uv pip install --index https://packages.example.com/simple ...`.
+restore automatic backend selection. A command-line `--index` replaces the
+inherited AMD index, so repeat the AMD URL when adding another index:
+
+```dockerfile
+RUN uv pip install \
+    --index https://stable.repo.amd.com/rocm/whl-next/ \
+    --index https://packages.example.com/simple \
+    -r requirements.txt
+```
 
 ## Run on a GPU
 
