@@ -8,11 +8,64 @@ lets your AI project configure options during bootstrap, then runs an epoch → 
 training loop. Your project supplies the training code. Skywright handles the
 infrastructure around it.
 
-The project is in early development. Only development setup and accelerator
-diagnostics exist today. The training runtime is not implemented yet.
+The project is in early development. Skywright currently provides accelerator
+diagnostics and a small training runtime with setup, epoch/step execution, and
+start/stop events.
 
 We follow KISS. Added complexity must have a clear benefit for library users or
 maintainers.
+
+## Training entrypoint
+
+A project exposes a setup function that returns its training definition. Skywright
+then owns the epoch and step loops.
+
+```python
+# project/training.py
+import argparse
+
+from skywright import EventListeners, RunContext, Start, Stop, Training
+
+
+def setup(context: RunContext) -> Training[object]:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=10)
+    options = parser.parse_args(context.argv)
+
+    model, optimizer, loader = build_training(context.accelerator.device)
+
+    def step(batch: object) -> None:
+        optimizer.zero_grad()
+        loss = model(batch)
+        loss.backward()
+        optimizer.step()
+
+    listeners = EventListeners()
+    listeners.add(Start, lambda event: print("training started"))
+    listeners.add(Stop, lambda event: print(f"training {event.outcome}"))
+    return Training(
+        epochs=options.epochs,
+        batches=lambda epoch: loader,
+        step=step,
+        listeners=listeners,
+    )
+```
+
+Run the same entrypoint locally or in Docker. Arguments after the target belong to
+the project.
+
+```console
+skywright run project.training:setup --epochs 20
+```
+
+```dockerfile
+ENTRYPOINT ["skywright", "run", "project.training:setup"]
+CMD ["--epochs", "20"]
+```
+
+Listeners run synchronously in registration order. `Start` is emitted after setup
+and validation. Once Start dispatch begins, Skywright emits `Stop` when the run
+completes, fails, or is interrupted.
 
 ## Development setup
 
