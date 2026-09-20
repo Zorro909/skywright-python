@@ -8,6 +8,7 @@ import sys
 from typing import cast
 
 from skywright.accelerator import inspect_accelerator
+from skywright.checkpointing import CheckpointError
 from skywright.training import Setup, run
 
 
@@ -31,6 +32,10 @@ def _parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("doctor", help="show the installed PyTorch accelerator")
     run_parser = subcommands.add_parser("run", help="run a project's training setup")
+    run_parser.add_argument(
+        "--checkpoint-dir",
+        help="save and resume training state in this local directory",
+    )
     run_parser.add_argument("target", help="project setup as package.module:function")
     run_parser.add_argument("project_arguments", nargs=argparse.REMAINDER)
     return parser
@@ -74,7 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         except _TargetError as error:
             print(f"skywright: {error}", file=sys.stderr)
             return 2
-        return run(setup, args.project_arguments)
+        try:
+            return run(
+                setup,
+                args.project_arguments,
+                checkpoint_dir=args.checkpoint_dir,
+            )
+        except CheckpointError as error:
+            print(f"skywright: {error}", file=sys.stderr)
+            return 2
     return 2
 
 

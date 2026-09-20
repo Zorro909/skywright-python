@@ -14,6 +14,7 @@ from skywright.events import (
 from skywright.training import (
     RunContext,
     Training,
+    TrainingState,
     run,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "Start",
     "Stop",
     "Training",
+    "TrainingState",
     "inspect_accelerator",
     "run",
 ]

@@ -42,7 +42,7 @@ then owns the epoch and step loops.
 # project/training.py
 import argparse
 
-from skywright import EventListeners, RunContext, Start, Stop, Training
+from skywright import EventListeners, RunContext, Start, Stop, Training, TrainingState
 
 
 def setup(context: RunContext) -> Training[object]:
@@ -66,6 +66,7 @@ def setup(context: RunContext) -> Training[object]:
         batches=lambda epoch: loader,
         step=step,
         listeners=listeners,
+        state=TrainingState(model, optimizer),
     )
 ```
 
@@ -75,6 +76,24 @@ the project.
 ```console
 skywright run project.training:setup --epochs 20
 ```
+
+Pass a local directory to save after each completed epoch and resume the same run
+automatically:
+
+```console
+skywright run --checkpoint-dir /checkpoints/trial project.training:setup --epochs 20
+```
+
+The directory identifies the run. Reuse it with the same project arguments, epoch
+count, PyTorch version, and accelerator type. In Docker, mount it from the host or a
+named volume. Skywright restores the model, optimizer, optional scheduler and AMP
+scaler, and random generator state. An interrupted epoch starts again from its first
+batch.
+
+Each successful `step` call must finish one logical optimizer update, including any
+gradient accumulation and scheduler or scaler work. `batches(epoch)` must create a
+fresh iterable that reproduces that epoch when setup arguments, seed, and input data
+are unchanged.
 
 ```dockerfile
 ENTRYPOINT ["skywright", "run", "project.training:setup"]

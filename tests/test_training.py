@@ -1,8 +1,23 @@
 from __future__ import annotations
 
-import pytest
+import random
+from pathlib import Path
+from typing import BinaryIO
 
-from skywright import EventListeners, RunContext, RunOutcome, Start, Stop, Training, run
+import numpy as np
+import pytest
+import torch
+
+from skywright import (
+    EventListeners,
+    RunContext,
+    RunOutcome,
+    Start,
+    Stop,
+    Training,
+    TrainingState,
+    run,
+)
 
 
 def test_run_controls_training_lifecycle() -> None:
@@ -163,3 +178,247 @@ def test_interruption_is_reported_to_stop_listeners() -> None:
     assert len(observed) == 1
     assert observed[0].outcome is RunOutcome.INTERRUPTED
     assert observed[0].error is interruption
+
+
+def test_run_resumes_registered_state_at_the_next_epoch(tmp_path: Path) -> None:
+    checkpoint_dir = tmp_path / "checkpoints"
+    visited_epochs: list[int] = []
+    attempts = 0
+    final_model: torch.nn.Linear | None = None
+
+    def setup(context: RunContext) -> Training[int]:
+        nonlocal attempts, final_model
+        attempts += 1
+        model = torch.nn.Linear(1, 1, bias=False)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.25, momentum=0.5)
+        final_model = model
+
+        def batches(epoch: int) -> tuple[int, ...]:
+            visited_epochs.append(epoch)
+            return (epoch,)
+
+        def step(epoch: int) -> None:
+            if attempts == 1 and epoch == 1:
+                raise KeyboardInterrupt
+            optimizer.zero_grad()
+            model(torch.ones(1, 1)).sum().backward()
+            optimizer.step()
+
+        return Training(
+            epochs=2,
+            batches=batches,
+            step=step,
+            state=TrainingState(model=model, optimizer=optimizer),
+        )
+
+    with pytest.raises(KeyboardInterrupt):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+    assert final_model is not None
+    interrupted_weight = final_model.weight.detach().clone()
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+
+    assert visited_epochs == [0, 1, 1]
+    assert final_model is not None
+    assert not torch.equal(final_model.weight, interrupted_weight)
+
+
+def test_resumed_run_matches_uninterrupted_training_after_replaying_epoch(
+    tmp_path: Path,
+) -> None:
+    def execute(
+        checkpoint_dir: Path | None, *, interrupt_once: bool
+    ) -> tuple[tuple[torch.Tensor, ...], torch.Tensor, int, float, float, float, torch.Tensor]:
+        attempts = 0
+        interrupted = False
+        final_state: TrainingState | None = None
+
+        def setup(context: RunContext) -> Training[tuple[int, int]]:
+            nonlocal attempts, final_state, interrupted
+            attempts += 1
+            random.seed(120)
+            np.random.seed(121)
+            torch.manual_seed(122)
+            model = torch.nn.Linear(2, 1)
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+            scaler = torch.amp.GradScaler("cpu")
+            final_state = TrainingState(model, optimizer, scheduler, scaler)
+            listeners = EventListeners()
+
+            def consume_randomness(event: Start) -> None:
+                random.random()
+                np.random.random()
+                torch.rand(1)
+
+            listeners.add(Start, consume_randomness)
+
+            def step(batch: tuple[int, int]) -> None:
+                nonlocal interrupted
+                optimizer.zero_grad()
+                multiplier = random.random() + float(np.random.random())
+                inputs = torch.rand(2, 2) * multiplier
+                with torch.autocast("cpu", dtype=torch.bfloat16):
+                    loss = model(inputs).square().sum()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
+                if interrupt_once and not interrupted and batch == (1, 0):
+                    interrupted = True
+                    raise KeyboardInterrupt
+
+            return Training(
+                epochs=3,
+                batches=lambda epoch: ((epoch, 0), (epoch, 1)),
+                step=step,
+                state=final_state,
+                listeners=listeners,
+            )
+
+        if interrupt_once:
+            with pytest.raises(KeyboardInterrupt):
+                run(setup, checkpoint_dir=checkpoint_dir)
+            assert attempts == 1
+            assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+        else:
+            assert run(setup) == 0
+
+        assert final_state is not None
+        assert final_state.scheduler is not None
+        assert final_state.scaler is not None
+        momentum = final_state.optimizer.state[next(iter(final_state.model.parameters()))]
+        return (
+            tuple(parameter.detach().clone() for parameter in final_state.model.parameters()),
+            momentum["momentum_buffer"].detach().clone(),
+            final_state.scheduler.last_epoch,
+            final_state.scaler.get_scale(),
+            random.random(),
+            float(np.random.random()),
+            torch.rand(3),
+        )
+
+    uninterrupted = execute(None, interrupt_once=False)
+    resumed = execute(tmp_path / "checkpoints", interrupt_once=True)
+
+    for actual_tensor, expected_tensor in zip(resumed[0], uninterrupted[0], strict=True):
+        torch.testing.assert_close(actual_tensor, expected_tensor)
+    torch.testing.assert_close(resumed[1], uninterrupted[1])
+    assert resumed[2:6] == uninterrupted[2:6]
+    torch.testing.assert_close(resumed[6], uninterrupted[6])
+
+
+def test_checkpoint_arguments_must_match_before_setup_runs_again(tmp_path: Path) -> None:
+    setup_calls = 0
+
+    def setup(context: RunContext) -> Training[object]:
+        nonlocal setup_calls
+        setup_calls += 1
+        model = torch.nn.Linear(1, 1)
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (),
+            step=lambda batch: None,
+            state=TrainingState(model, torch.optim.SGD(model.parameters(), lr=0.1)),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, ["--rate", "0.1"], checkpoint_dir=checkpoint_dir) == 0
+
+    with pytest.raises(RuntimeError, match="arguments digest does not match"):
+        run(setup, ["--rate", "0.2"], checkpoint_dir=checkpoint_dir)
+
+    assert setup_calls == 1
+
+
+def test_checkpoint_directory_requires_declared_training_state(tmp_path: Path) -> None:
+    def setup(context: RunContext) -> Training[object]:
+        return Training(epochs=1, batches=lambda epoch: (), step=lambda batch: None)
+
+    with pytest.raises(ValueError, match=r"requires Training\.state"):
+        run(setup, checkpoint_dir=tmp_path / "checkpoints")
+
+
+def test_changed_optimizer_parameter_order_is_rejected_before_start(tmp_path: Path) -> None:
+    reverse_parameters = False
+    starts = 0
+
+    def setup(context: RunContext) -> Training[object]:
+        nonlocal starts
+        model = torch.nn.Sequential(torch.nn.Linear(1, 1), torch.nn.Linear(1, 1))
+        parameters = list(model.parameters())
+        if reverse_parameters:
+            parameters.reverse()
+        optimizer = torch.optim.SGD(parameters, lr=0.1)
+        listeners = EventListeners()
+
+        def observe_start(event: Start) -> None:
+            nonlocal starts
+            starts += 1
+
+        listeners.add(Start, observe_start)
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (),
+            step=lambda batch: None,
+            state=TrainingState(model, optimizer),
+            listeners=listeners,
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    reverse_parameters = True
+
+    with pytest.raises(RuntimeError, match="optimizer parameters does not match"):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+    assert starts == 1
+
+
+def test_failed_checkpoint_write_preserves_previous_completed_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+    visited_epochs: list[int] = []
+    final_model: torch.nn.Linear | None = None
+
+    def setup(context: RunContext) -> Training[int]:
+        nonlocal attempts, final_model
+        attempts += 1
+        model = torch.nn.Linear(1, 1, bias=False)
+        model.weight.data.zero_()
+        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
+        final_model = model
+
+        def step(epoch: int) -> None:
+            visited_epochs.append(epoch)
+            if attempts == 1 and epoch == 1:
+                raise KeyboardInterrupt
+            optimizer.zero_grad()
+            model(torch.ones(1, 1)).sum().backward()
+            optimizer.step()
+
+        return Training(
+            epochs=2,
+            batches=lambda epoch: (epoch,),
+            step=step,
+            state=TrainingState(model, optimizer),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    with pytest.raises(KeyboardInterrupt):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+    def fail_save(value: object, file: BinaryIO) -> None:
+        file.write(b"partial")
+        raise OSError("disk failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(torch, "save", fail_save)
+        with pytest.raises(OSError, match="disk failed"):
+            run(setup, checkpoint_dir=checkpoint_dir)
+
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    assert visited_epochs == [0, 1, 1, 1]
+    assert final_model is not None
+    torch.testing.assert_close(final_model.weight, torch.tensor([[-2.0]]))
