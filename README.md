@@ -91,6 +91,9 @@ from the host or a named volume. Skywright restores the model, optimizer, option
 scheduler and AMP scaler, and random generator state. An interrupted epoch starts
 again from its first batch.
 
+Checkpointing supports one training process. It does not yet support `torchrun` or
+other distributed training launches.
+
 Each successful `step` call must finish one logical optimizer update, including any
 gradient accumulation and scheduler or scaler work. `batches(epoch)` must create a
 fresh iterable that reproduces that epoch when setup arguments, seed, and input data

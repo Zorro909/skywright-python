@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, BinaryIO, cast
 
 import numpy as np
 import torch
+from torch.nn.modules.lazy import LazyModuleMixin
+from torch.nn.parameter import UninitializedBuffer, UninitializedParameter
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -106,7 +108,13 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         if not isinstance(metadata, dict):
             raise CheckpointError("checkpoint metadata is missing or malformed")
         for key, value in expected.items():
-            if metadata.get(key) != value:
+            actual = metadata.get(key)
+            matches = (
+                _model_shapes_match(actual, value)
+                if key == "model_shapes"
+                else actual == value
+            )
+            if not matches:
                 raise CheckpointError(
                     f"checkpoint {key.replace('_', ' ')} does not match this run"
                 )
@@ -282,7 +290,7 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
             "setup": self._setup_identity,
             "arguments_digest": self._arguments_digest,
             "epochs": epochs,
-            "model_type": _type_name(state.model),
+            "model_type": _model_type_name(state.model),
             "optimizer_type": _type_name(state.optimizer),
             "scheduler_type": None if state.scheduler is None else _type_name(state.scheduler),
             "scaler_type": None if state.scaler is None else _type_name(state.scaler),
@@ -333,8 +341,19 @@ def _arguments_digest(arguments: Sequence[str]) -> str:
 
 
 def _type_name(value: object) -> str:
-    value_type = type(value)
-    return f"{value_type.__module__}.{value_type.__qualname__}"
+    return _class_name(type(value))
+
+
+def _class_name(value: type[object]) -> str:
+    return f"{value.__module__}.{value.__qualname__}"
+
+
+def _model_type_name(model: torch.nn.Module) -> str:
+    if isinstance(model, LazyModuleMixin):
+        target_type = model.cls_to_become
+        if target_type is not None:
+            return _class_name(target_type)
+    return _type_name(model)
 
 
 def _optimizer_parameter_names(state: TrainingState) -> list[list[str]]:
@@ -353,13 +372,36 @@ def _optimizer_parameter_names(state: TrainingState) -> list[list[str]]:
     return groups
 
 
-def _model_shapes(model_state: Mapping[str, object]) -> dict[str, list[int]]:
-    shapes: dict[str, list[int]] = {}
+def _model_shapes(model_state: Mapping[str, object]) -> dict[str, list[int] | None]:
+    shapes: dict[str, list[int] | None] = {}
     for name, value in model_state.items():
+        if isinstance(
+            value,
+            UninitializedParameter | UninitializedBuffer,
+        ):
+            shapes[name] = None
+            continue
         if not isinstance(value, torch.Tensor):
             raise CheckpointError("model state must contain tensors only")
         shapes[name] = list(value.shape)
     return shapes
+
+
+def _model_shapes_match(actual: object, expected: object) -> bool:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    if actual.keys() != expected.keys():
+        return False
+    for name, expected_shape in expected.items():
+        actual_shape = actual[name]
+        if expected_shape is None:
+            if not isinstance(actual_shape, list) or not all(
+                isinstance(size, int) and not isinstance(size, bool) for size in actual_shape
+            ):
+                return False
+        elif actual_shape != expected_shape:
+            return False
+    return True
 
 
 def _skywright_version() -> str:
@@ -369,6 +411,11 @@ def _skywright_version() -> str:
 
 
 def _validate_payload(value: object, path: str = "checkpoint") -> None:
+    if isinstance(
+        value,
+        UninitializedParameter | UninitializedBuffer,
+    ):
+        raise CheckpointError("model parameters must be initialized before checkpointing")
     if value is None or isinstance(value, bool | int | float | str | bytes | torch.Tensor):
         return
     if isinstance(value, Mapping):

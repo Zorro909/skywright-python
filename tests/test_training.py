@@ -463,6 +463,39 @@ def test_checkpoint_without_rng_state_is_rejected(tmp_path: Path) -> None:
         run(setup, checkpoint_dir=checkpoint_dir)
 
 
+def test_lazy_model_initializes_and_resumes_from_a_completed_checkpoint(
+    tmp_path: Path,
+) -> None:
+    final_model: torch.nn.Module | None = None
+
+    def setup(context: RunContext) -> Training[torch.Tensor]:
+        nonlocal final_model
+        model = torch.nn.LazyLinear(1)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        final_model = model
+
+        def step(batch: torch.Tensor) -> None:
+            optimizer.zero_grad()
+            model(batch).sum().backward()
+            optimizer.step()
+
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (torch.ones(1, 2),),
+            step=step,
+            state=TrainingState(model, optimizer),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    assert final_model is not None
+    trained_weight = final_model.weight.detach().clone()
+
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    assert final_model is not None
+    torch.testing.assert_close(final_model.weight, trained_weight)
+
+
 @pytest.mark.parametrize("failure_stage", ["serialization", "publication"])
 def test_failed_checkpoint_write_preserves_previous_completed_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
