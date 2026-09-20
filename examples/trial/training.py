@@ -4,7 +4,7 @@ import argparse
 
 import torch
 
-from skywright import EventListeners, RunContext, Stop, Training
+from skywright import EventListeners, RunContext, Stop, Training, TrainingState
 
 
 def setup(context: RunContext) -> Training[torch.Tensor]:
@@ -31,4 +31,5 @@ def setup(context: RunContext) -> Training[torch.Tensor]:
         batches=lambda epoch: (inputs,),
         step=step,
         listeners=listeners,
+        state=TrainingState(model, optimizer),
     )

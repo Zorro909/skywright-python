@@ -106,3 +106,79 @@ def test_run_command_dispatches_stop_when_sigterm_interrupts_training(tmp_path: 
 
     assert result.returncode == 128 + signal.SIGTERM
     assert result.stdout.splitlines() == ["start", "stop interrupted"]
+
+
+def test_run_command_uses_checkpoint_directory_and_completed_run_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "checkpointed_training.py"
+    project.write_text(
+        textwrap.dedent(
+            """
+            import torch
+
+            from skywright import EventListeners, Start, Stop, Training, TrainingState
+
+
+            def setup(context):
+                print(f"setup {context.argv}")
+                model = torch.nn.Linear(1, 1)
+                optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+                listeners = EventListeners()
+                listeners.add(Start, lambda event: print("start"))
+                listeners.add(Stop, lambda event: print(f"stop {event.outcome}"))
+                return Training(
+                    epochs=1,
+                    batches=lambda epoch: (epoch,),
+                    step=lambda batch: print(f"step {batch}"),
+                    listeners=listeners,
+                    state=TrainingState(model, optimizer),
+                )
+            """
+        )
+    )
+    environment = os.environ | {
+        "PYTHONPATH": os.pathsep.join((str(SOURCE_ROOT), str(tmp_path)))
+    }
+    command = [
+        sys.executable,
+        "-m",
+        "skywright.cli",
+        "run",
+        "--checkpoint-dir",
+        str(tmp_path / "checkpoints"),
+        "checkpointed_training:setup",
+        "--learning-rate",
+        "0.1",
+    ]
+
+    first = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert first.returncode == 0
+    assert first.stdout.splitlines() == [
+        "setup ('--learning-rate', '0.1')",
+        "start",
+        "step 0",
+        "stop completed",
+    ]
+    assert second.returncode == 0
+    assert second.stdout.splitlines() == [
+        "setup ('--learning-rate', '0.1')",
+        "start",
+        "stop completed",
+    ]
