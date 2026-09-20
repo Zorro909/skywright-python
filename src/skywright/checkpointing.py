@@ -8,7 +8,7 @@ import os
 import random
 import secrets
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, cast
 
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 _FORMAT_VERSION = 1
 _RUN_RECORD = "run.json"
 _CHECKPOINT = "checkpoint.pt"
+_PREVIOUS_CHECKPOINT = f".{_CHECKPOINT}.previous.tmp"
 _LOCK = ".lock"
 
 
@@ -188,18 +189,41 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         _validate_payload(payload)
         temporary_path = self._directory / f".{_CHECKPOINT}.{secrets.token_hex(8)}.tmp"
         checkpoint_path = self._directory / _CHECKPOINT
+        previous_path = self._directory / _PREVIOUS_CHECKPOINT
         try:
             with temporary_path.open("xb") as checkpoint_file:
                 torch.save(payload, checkpoint_file)
                 checkpoint_file.flush()
                 os.fsync(checkpoint_file.fileno())
-            os.replace(temporary_path, checkpoint_path)
-            _fsync_directory(self._directory)
+            had_previous = checkpoint_path.exists()
+            if had_previous:
+                os.replace(checkpoint_path, previous_path)
+            try:
+                os.replace(temporary_path, checkpoint_path)
+                _fsync_directory(self._directory)
+            except BaseException:
+                if had_previous and previous_path.exists():
+                    os.replace(previous_path, checkpoint_path)
+                else:
+                    checkpoint_path.unlink(missing_ok=True)
+                with suppress(OSError):
+                    _fsync_directory(self._directory)
+                raise
+            with suppress(OSError):
+                previous_path.unlink(missing_ok=True)
         finally:
             temporary_path.unlink(missing_ok=True)
 
     def _open_run_record(self) -> int:
         record_path = self._directory / _RUN_RECORD
+        checkpoint_path = self._directory / _CHECKPOINT
+        previous_path = self._directory / _PREVIOUS_CHECKPOINT
+        if previous_path.exists():
+            if checkpoint_path.exists():
+                previous_path.unlink()
+            else:
+                os.replace(previous_path, checkpoint_path)
+            _fsync_directory(self._directory)
         for pattern in (f".{_RUN_RECORD}.*.tmp", f".{_CHECKPOINT}.*.tmp"):
             for temporary_path in self._directory.glob(pattern):
                 temporary_path.unlink(missing_ok=True)
@@ -213,7 +237,7 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
             )
 
         if not record_path.exists():
-            if (self._directory / _CHECKPOINT).exists():
+            if checkpoint_path.exists():
                 raise CheckpointError("checkpoint exists without a run record")
             seed = secrets.randbits(63)
             record = {

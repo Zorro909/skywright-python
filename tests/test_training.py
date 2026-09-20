@@ -463,8 +463,9 @@ def test_checkpoint_without_rng_state_is_rejected(tmp_path: Path) -> None:
         run(setup, checkpoint_dir=checkpoint_dir)
 
 
+@pytest.mark.parametrize("failure_stage", ["serialization", "publication"])
 def test_failed_checkpoint_write_preserves_previous_completed_epoch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
 ) -> None:
     attempts = 0
     visited_epochs: list[int] = []
@@ -501,8 +502,14 @@ def test_failed_checkpoint_write_preserves_previous_completed_epoch(
         file.write(b"partial")
         raise OSError("disk failed")
 
+    def fail_fsync(directory: Path) -> None:
+        raise OSError("disk failed")
+
     with monkeypatch.context() as patch:
-        patch.setattr(torch, "save", fail_save)
+        if failure_stage == "serialization":
+            patch.setattr(torch, "save", fail_save)
+        else:
+            patch.setattr("skywright.checkpointing._fsync_directory", fail_fsync)
         with pytest.raises(OSError, match="disk failed"):
             run(setup, checkpoint_dir=checkpoint_dir)
 
