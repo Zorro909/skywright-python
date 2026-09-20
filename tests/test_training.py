@@ -375,6 +375,94 @@ def test_changed_optimizer_parameter_order_is_rejected_before_start(tmp_path: Pa
     assert starts == 1
 
 
+def test_changed_model_shape_and_optional_state_are_rejected_before_start(
+    tmp_path: Path,
+) -> None:
+    configuration = "original"
+    starts = 0
+
+    def setup(context: RunContext) -> Training[object]:
+        nonlocal starts
+        output_features = 2 if configuration == "shape" else 1
+        model = torch.nn.Linear(1, output_features)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        scheduler = (
+            torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+            if configuration == "scheduler"
+            else None
+        )
+        listeners = EventListeners()
+
+        def observe_start(event: Start) -> None:
+            nonlocal starts
+            starts += 1
+
+        listeners.add(Start, observe_start)
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (),
+            step=lambda batch: None,
+            listeners=listeners,
+            state=TrainingState(model, optimizer, scheduler),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+
+    configuration = "shape"
+    with pytest.raises(RuntimeError, match="model shapes does not match"):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+    configuration = "scheduler"
+    with pytest.raises(RuntimeError, match="scheduler type does not match"):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+    assert starts == 1
+
+
+@pytest.mark.parametrize("field", ["skywright_version", "torch_version", "accelerator"])
+def test_changed_runtime_metadata_is_rejected(tmp_path: Path, field: str) -> None:
+    def setup(context: RunContext) -> Training[object]:
+        model = torch.nn.Linear(1, 1)
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (),
+            step=lambda batch: None,
+            state=TrainingState(model, torch.optim.SGD(model.parameters(), lr=0.1)),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    checkpoint_path = checkpoint_dir / "checkpoint.pt"
+    payload = torch.load(checkpoint_path, weights_only=True)
+    payload["metadata"][field] = "changed"
+    torch.save(payload, checkpoint_path)
+
+    with pytest.raises(RuntimeError, match=field.replace("_", " ")):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+
+def test_checkpoint_without_rng_state_is_rejected(tmp_path: Path) -> None:
+    def setup(context: RunContext) -> Training[object]:
+        model = torch.nn.Linear(1, 1)
+        return Training(
+            epochs=1,
+            batches=lambda epoch: (),
+            step=lambda batch: None,
+            state=TrainingState(model, torch.optim.SGD(model.parameters(), lr=0.1)),
+        )
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert run(setup, checkpoint_dir=checkpoint_dir) == 0
+    checkpoint_path = checkpoint_dir / "checkpoint.pt"
+    payload = torch.load(checkpoint_path, weights_only=True)
+    del payload["rng"]
+    torch.save(payload, checkpoint_path)
+
+    with pytest.raises(RuntimeError, match="RNG state is missing"):
+        run(setup, checkpoint_dir=checkpoint_dir)
+
+
 def test_failed_checkpoint_write_preserves_previous_completed_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

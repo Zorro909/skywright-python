@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -58,12 +57,10 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         lock_path = self._directory / _LOCK
         lock_file = lock_path.open("a+b")
         try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            _lock_exclusive(lock_file, self._directory)
+        except BaseException:
             lock_file.close()
-            raise CheckpointError(
-                f"checkpoint directory is already in use: {self._directory}"
-            ) from None
+            raise
         self._lock_file = lock_file
 
         try:
@@ -80,7 +77,7 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         traceback: TracebackType | None,
     ) -> None:
         if self._lock_file is not None:
-            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            _unlock(self._lock_file)
             self._lock_file.close()
             self._lock_file = None
 
@@ -95,7 +92,7 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         try:
             payload = torch.load(
                 checkpoint_path,
-                map_location=self._accelerator.device,
+                map_location="cpu",
                 weights_only=True,
             )
         except Exception as error:
@@ -137,9 +134,9 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
             raise CheckpointError(f"checkpoint training state is incompatible: {error}") from error
 
         rng = checkpoint.get("rng")
-        if rng is not None and not isinstance(rng, dict):
-            raise CheckpointError("checkpoint RNG state is malformed")
-        return next_epoch, completed_steps, cast("Mapping[str, object] | None", rng)
+        if not isinstance(rng, dict):
+            raise CheckpointError("checkpoint RNG state is missing or malformed")
+        return next_epoch, completed_steps, cast("Mapping[str, object]", rng)
 
     def restore_rng(self, rng: Mapping[str, object]) -> None:
         """Restore random generators after Start listeners have run."""
@@ -173,16 +170,22 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
         completed_steps: int,
     ) -> None:
         """Atomically publish state after a completed epoch."""
+        model_state = state.model.state_dict()
         payload: dict[str, object] = {
-            "metadata": self._metadata(state, epochs=epochs),
+            "metadata": self._metadata(
+                state,
+                epochs=epochs,
+                model_state=model_state,
+            ),
             "next_epoch": next_epoch,
             "completed_steps": completed_steps,
-            "model": state.model.state_dict(),
+            "model": model_state,
             "optimizer": state.optimizer.state_dict(),
             "scheduler": None if state.scheduler is None else state.scheduler.state_dict(),
             "scaler": None if state.scaler is None else state.scaler.state_dict(),
             "rng": self._capture_rng(),
         }
+        _validate_payload(payload)
         temporary_path = self._directory / f".{_CHECKPOINT}.{secrets.token_hex(8)}.tmp"
         checkpoint_path = self._directory / _CHECKPOINT
         try:
@@ -241,7 +244,15 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
             raise CheckpointError("run record seed is missing or malformed")
         return seed
 
-    def _metadata(self, state: TrainingState, *, epochs: int) -> dict[str, object]:
+    def _metadata(
+        self,
+        state: TrainingState,
+        *,
+        epochs: int,
+        model_state: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        if model_state is None:
+            model_state = state.model.state_dict()
         return {
             "format_version": _FORMAT_VERSION,
             "setup": self._setup_identity,
@@ -252,7 +263,7 @@ class CheckpointStore(AbstractContextManager["CheckpointStore"]):
             "scheduler_type": None if state.scheduler is None else _type_name(state.scheduler),
             "scaler_type": None if state.scaler is None else _type_name(state.scaler),
             "optimizer_parameters": _optimizer_parameter_names(state),
-            "model_shapes": _model_shapes(state),
+            "model_shapes": _model_shapes(model_state),
             "skywright_version": _skywright_version(),
             "torch_version": str(torch.__version__),
             "accelerator": self._accelerator.kind,
@@ -318,9 +329,9 @@ def _optimizer_parameter_names(state: TrainingState) -> list[list[str]]:
     return groups
 
 
-def _model_shapes(state: TrainingState) -> dict[str, list[int]]:
+def _model_shapes(model_state: Mapping[str, object]) -> dict[str, list[int]]:
     shapes: dict[str, list[int]] = {}
-    for name, value in state.model.state_dict().items():
+    for name, value in model_state.items():
         if not isinstance(value, torch.Tensor):
             raise CheckpointError("model state must contain tensors only")
         shapes[name] = list(value.shape)
@@ -331,6 +342,39 @@ def _skywright_version() -> str:
     from skywright import __version__
 
     return __version__
+
+
+def _validate_payload(value: object, path: str = "checkpoint") -> None:
+    if value is None or isinstance(value, bool | int | float | str | bytes | torch.Tensor):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, bool | int | float | str | bytes):
+                raise CheckpointError(f"{path} contains unsupported key type {type(key).__name__}")
+            _validate_payload(item, f"{path}.{key}")
+        return
+    if isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            _validate_payload(item, f"{path}[{index}]")
+        return
+    raise CheckpointError(f"{path} contains unsupported value type {type(value).__name__}")
+
+
+def _lock_exclusive(lock_file: BinaryIO, directory: Path) -> None:
+    try:
+        import fcntl
+    except ModuleNotFoundError:
+        raise CheckpointError("checkpoint directory locking requires a POSIX system") from None
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise CheckpointError(f"checkpoint directory is already in use: {directory}") from None
+
+
+def _unlock(lock_file: BinaryIO) -> None:
+    import fcntl
+
+    fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
